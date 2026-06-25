@@ -1,0 +1,6 @@
+discord.py-self
+PyNaCl
+python-dotenv
+Flask
+davey
+

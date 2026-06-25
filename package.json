@@ -1,0 +1,18 @@
+{
+  "name": "discord-voice-247-idler",
+  "version": "1.0.0",
+  "description": "Discord Voice 24/7 Idler using selfbot with E2EE DAVE protocol support",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js-selfbot-v13": "^3.4.5",
+    "@discordjs/voice": "^0.17.0",
+    "@snazzah/davey": "^1.0.4",
+    "libsodium-wrappers": "^0.7.13",
+    "opusscript": "^0.0.8",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
