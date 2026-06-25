@@ -115,10 +115,23 @@ async def safe_join_voice():
         
         try:
             # Connect to voice channel
-            await channel.connect(self_mute=SELF_MUTE, self_deaf=SELF_DEAF)
+            vc = await channel.connect(self_mute=SELF_MUTE, self_deaf=SELF_DEAF)
             print(f"[{get_timestamp()}] [SUCCESS] Successfully joined voice channel: '{channel.name}'")
             print(f"[{get_timestamp()}] [INFO] Settings: self_mute={SELF_MUTE}, self_deaf={SELF_DEAF}")
             bot_status = f"Connected to voice channel: {channel.name} ({channel.guild.name})"
+
+            # Play speech.mp3 after 10 seconds if it exists
+            if os.path.exists("speech.mp3"):
+                print(f"[{get_timestamp()}] [SPEECH] Scheduled speech.mp3 to play in 10 seconds...")
+                async def play_speech_delayed():
+                    await asyncio.sleep(10)
+                    if vc.is_connected():
+                        print(f"[{get_timestamp()}] [SPEECH] Playing speech.mp3 now.")
+                        try:
+                            vc.play(discord.FFmpegPCMAudio("speech.mp3"))
+                        except Exception as e:
+                            print(f"[{get_timestamp()}] [SPEECH ERROR] Failed to play speech.mp3: {e}")
+                bot.loop.create_task(play_speech_delayed())
         except Exception as e:
             print(f"[{get_timestamp()}] [ERROR] Failed to connect to voice channel: {e}")
             bot_status = f"Failed to connect: {e}"
