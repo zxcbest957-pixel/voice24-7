@@ -54,6 +54,8 @@ function getTimestamp() {
     return new Date().toLocaleTimeString();
 }
 
+let targetGuildId = null;
+
 async function safeJoinVoice() {
     try {
         const channel = await client.channels.fetch(CHANNEL_ID);
@@ -69,6 +71,22 @@ async function safeJoinVoice() {
             return;
         }
 
+        // Cache the correct guild ID
+        targetGuildId = channel.guild.id;
+
+        // Check if there is an existing active connection in the target guild
+        const existingConnection = getVoiceConnection(targetGuildId);
+        if (existingConnection) {
+            const status = existingConnection.state.status;
+            if (existingConnection.joinConfig.channelId === CHANNEL_ID && 
+                status !== 'disconnected' && 
+                status !== 'destroyed') {
+                // Already connected to the right channel and healthy, skip rejoining
+                botStatus = `Connected to voice channel: ${channel.name} (${channel.guild.name})`;
+                return;
+            }
+        }
+
         console.log(`[${getTimestamp()}] [INFO] Attempting to connect to channel '${channel.name}' in guild '${channel.guild.name}'...`);
         botStatus = `Connecting to ${channel.name}...`;
 
@@ -80,6 +98,9 @@ async function safeJoinVoice() {
             selfMute: SELF_MUTE,
             selfDeaf: SELF_DEAF,
         });
+
+        connection.removeAllListeners('stateChange');
+        connection.removeAllListeners('error');
 
         connection.on('stateChange', (oldState, newState) => {
             console.log(`[${getTimestamp()}] [VOICE STATE] Changed from ${oldState.status} to ${newState.status}`);
@@ -113,12 +134,30 @@ client.on('ready', async () => {
     setInterval(async () => {
         if (!client.isReady()) return;
 
-        const connection = getVoiceConnection(client.guilds.cache.first()?.id);
-        
-        // If connection doesn't exist, try to join
-        if (!connection) {
-            console.log(`[${getTimestamp()}] [KEEPALIVE] Voice connection not found. Reconnecting...`);
-            await safeJoinVoice();
+        // If targetGuildId isn't known yet, try to fetch the channel to resolve it
+        if (!targetGuildId) {
+            try {
+                const channel = await client.channels.fetch(CHANNEL_ID);
+                if (channel) {
+                    targetGuildId = channel.guild.id;
+                }
+            } catch (err) {
+                console.error(`[${getTimestamp()}] [KEEPALIVE] Failed to fetch channel to find guild ID: ${err.message}`);
+            }
+        }
+
+        if (targetGuildId) {
+            const connection = getVoiceConnection(targetGuildId);
+            const status = connection?.state.status;
+            
+            // Reconnect if the connection is missing, disconnected, or destroyed
+            if (!connection || status === 'disconnected' || status === 'destroyed') {
+                console.log(`[${getTimestamp()}] [KEEPALIVE] Voice connection not found or inactive (status: ${status || 'none'}). Reconnecting...`);
+                await safeJoinVoice();
+            } else if (connection.joinConfig.channelId !== CHANNEL_ID) {
+                console.log(`[${getTimestamp()}] [KEEPALIVE] Connected to wrong channel (${connection.joinConfig.channelId}). Reconnecting to target channel...`);
+                await safeJoinVoice();
+            }
         }
     }, 30000);
 });
