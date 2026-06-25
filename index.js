@@ -1,9 +1,19 @@
 const os = require('os');
+const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const { Client } = require('discord.js-selfbot-v13');
 const { joinVoiceChannel, getVoiceConnection, createAudioPlayer, createAudioResource, StreamType } = require('@discordjs/voice');
 const { Readable } = require('stream');
+const ffmpeg = require('ffmpeg-static');
 require('dotenv').config();
+
+if (ffmpeg) {
+    const ffmpegDir = path.dirname(ffmpeg);
+    process.env.PATH = `${ffmpegDir}${path.delimiter}${process.env.PATH}`;
+}
+
+const SPEECH_FILE = path.join(__dirname, 'speech.mp3');
 
 // Load configurations
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -96,6 +106,18 @@ const audioPlayer = createAudioPlayer();
 
 audioPlayer.on('stateChange', (oldState, newState) => {
     console.log(`[AUDIO PLAYER] Changed from ${oldState.status} to ${newState.status}`);
+    if (newState.status === 'idle') {
+        console.log(`[AUDIO PLAYER] Finished playing or idle. Resuming silence keepalive...`);
+        try {
+            const silenceStream = new SilenceStream();
+            const resource = createAudioResource(silenceStream, {
+                inputType: StreamType.Opus
+            });
+            audioPlayer.play(resource);
+        } catch (silenceErr) {
+            console.error(`[AUDIO PLAYER ERROR] Failed to resume silence keepalive: ${silenceErr.message}`);
+        }
+    }
 });
 
 audioPlayer.on('error', (error) => {
@@ -168,6 +190,25 @@ async function safeJoinVoice(channelId = currentChannelId) {
             if (newState.status === 'ready') {
                 console.log(`[${getTimestamp()}] [SUCCESS] Voice connection established successfully!`);
                 botStatus = `Connected to voice channel: ${channel.name} (${channel.guild.name})`;
+
+                // Play voice message after 10 seconds of joining
+                if (fs.existsSync(SPEECH_FILE)) {
+                    console.log(`[${getTimestamp()}] [SPEECH] Scheduled speech.mp3 to play in 10 seconds...`);
+                    setTimeout(() => {
+                        const currentConnection = getVoiceConnection(targetGuildId);
+                        if (currentConnection && currentConnection.state.status === 'ready' && currentConnection.joinConfig.channelId === channelId) {
+                            console.log(`[${getTimestamp()}] [SPEECH] Playing speech.mp3 now.`);
+                            try {
+                                const resource = createAudioResource(SPEECH_FILE);
+                                audioPlayer.play(resource);
+                            } catch (speechErr) {
+                                console.error(`[${getTimestamp()}] [SPEECH ERROR] Failed to play speech.mp3: ${speechErr.message}`);
+                            }
+                        }
+                    }, 10000);
+                } else {
+                    console.log(`[${getTimestamp()}] [SPEECH] No speech.mp3 file found at ${SPEECH_FILE}. Skipping speech playback.`);
+                }
             }
         });
 
