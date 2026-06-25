@@ -213,7 +213,11 @@ async function scanAndMoveToActiveChannel() {
             // Count active humans (excluding our selfbot client)
             const humanCount = channel.members.filter(m => m.id !== client.user.id).size;
             
-            if (humanCount > 0 && humanCount > maxActiveUsers) {
+            // Check if the channel is full (has no space for the bot to join)
+            const isCurrentChannel = channel.members.has(client.user.id);
+            const hasSpace = channel.userLimit === 0 || channel.members.size < channel.userLimit || isCurrentChannel;
+
+            if (humanCount > 0 && hasSpace && humanCount > maxActiveUsers) {
                 maxActiveUsers = humanCount;
                 bestChannel = channel;
             }
