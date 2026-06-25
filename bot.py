@@ -13,12 +13,18 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
+import static_ffmpeg
+try:
+    static_ffmpeg.add_paths()
+except Exception as static_ffmpeg_err:
+    print(f"[WARNING] Failed to load static-ffmpeg: {static_ffmpeg_err}")
+
 # Load configurations
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID_STR = os.getenv("CHANNEL_ID")
-SELF_MUTE_STR = os.getenv("SELF_MUTE", "True")
-SELF_DEAF_STR = os.getenv("SELF_DEAF", "True")
+SELF_MUTE_STR = os.getenv("SELF_MUTE", "False")
+SELF_DEAF_STR = os.getenv("SELF_DEAF", "False")
 KEEP_ALIVE_STR = os.getenv("KEEP_ALIVE", "True")
 PORT_STR = os.getenv("PORT", "8080")
 

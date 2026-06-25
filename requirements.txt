@@ -3,4 +3,5 @@ PyNaCl
 python-dotenv
 Flask
 davey
+static-ffmpeg
 
