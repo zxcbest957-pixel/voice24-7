@@ -7,7 +7,7 @@ require('dotenv').config();
 
 // Load configurations
 const TOKEN = process.env.DISCORD_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID;
+const DEFAULT_CHANNEL_ID = process.env.CHANNEL_ID;
 const SELF_MUTE = process.env.SELF_MUTE?.toLowerCase() === 'true';
 const SELF_DEAF = process.env.SELF_DEAF?.toLowerCase() === 'true';
 const KEEP_ALIVE = process.env.KEEP_ALIVE?.toLowerCase() === 'true';
@@ -18,10 +18,12 @@ if (!TOKEN || TOKEN.trim() === '') {
     process.exit(1);
 }
 
-if (!CHANNEL_ID || CHANNEL_ID.trim() === '') {
+if (!DEFAULT_CHANNEL_ID || DEFAULT_CHANNEL_ID.trim() === '') {
     console.error('[ERROR] CHANNEL_ID is missing in the .env file.');
     process.exit(1);
 }
+
+let currentChannelId = DEFAULT_CHANNEL_ID;
 
 // Configure Express app for 24/7 web server keep-alive
 const app = express();
@@ -106,17 +108,17 @@ function getTimestamp() {
 
 let targetGuildId = null;
 
-async function safeJoinVoice() {
+async function safeJoinVoice(channelId = currentChannelId) {
     try {
-        const channel = await client.channels.fetch(CHANNEL_ID);
+        const channel = await client.channels.fetch(channelId);
         if (!channel) {
-            console.error(`[${getTimestamp()}] [ERROR] Could not find channel with ID ${CHANNEL_ID}`);
+            console.error(`[${getTimestamp()}] [ERROR] Could not find channel with ID ${channelId}`);
             botStatus = `Error: Channel not found`;
             return;
         }
 
         if (channel.type !== 'GUILD_VOICE' && channel.type !== 'GUILD_STAGE_VOICE') {
-            console.error(`[${getTimestamp()}] [ERROR] Channel ${CHANNEL_ID} is not a Voice or Stage channel.`);
+            console.error(`[${getTimestamp()}] [ERROR] Channel ${channelId} is not a Voice or Stage channel.`);
             botStatus = `Error: Invalid channel type`;
             return;
         }
@@ -128,7 +130,7 @@ async function safeJoinVoice() {
         const existingConnection = getVoiceConnection(targetGuildId);
         if (existingConnection) {
             const status = existingConnection.state.status;
-            if (existingConnection.joinConfig.channelId === CHANNEL_ID && 
+            if (existingConnection.joinConfig.channelId === channelId && 
                 status !== 'disconnected' && 
                 status !== 'destroyed') {
                 // Already connected to the right channel and healthy, skip rejoining
@@ -180,14 +182,80 @@ async function safeJoinVoice() {
     }
 }
 
+async function scanAndMoveToActiveChannel() {
+    try {
+        const defaultChannel = await client.channels.fetch(DEFAULT_CHANNEL_ID);
+        if (!defaultChannel) {
+            console.error(`[${getTimestamp()}] [SCANNER] Could not find default channel with ID ${DEFAULT_CHANNEL_ID}`);
+            return;
+        }
+
+        const guild = defaultChannel.guild;
+        if (!guild) {
+            console.error(`[${getTimestamp()}] [SCANNER] Could not resolve guild for default channel.`);
+            return;
+        }
+
+        // Try to fetch latest channels state from guild API
+        try {
+            await guild.channels.fetch();
+        } catch (fetchErr) {
+            console.warn(`[${getTimestamp()}] [SCANNER] Warning: Failed to fetch guild channels from API, using cache: ${fetchErr.message}`);
+        }
+
+        // Filter for voice and stage channels
+        const voiceChannels = guild.channels.cache.filter(c => c.type === 'GUILD_VOICE' || c.type === 'GUILD_STAGE_VOICE');
+
+        let bestChannel = null;
+        let maxActiveUsers = 0;
+
+        for (const [id, channel] of voiceChannels) {
+            // Count active humans (excluding our selfbot client)
+            const humanCount = channel.members.filter(m => m.id !== client.user.id).size;
+            
+            if (humanCount > 0 && humanCount > maxActiveUsers) {
+                maxActiveUsers = humanCount;
+                bestChannel = channel;
+            }
+        }
+
+        let newTargetId = DEFAULT_CHANNEL_ID;
+        if (bestChannel) {
+            newTargetId = bestChannel.id;
+            console.log(`[${getTimestamp()}] [SCANNER] Found voice channel with active users: '${bestChannel.name}' (Active users: ${maxActiveUsers})`);
+        } else {
+            console.log(`[${getTimestamp()}] [SCANNER] No voice channels with active users found. Falling back to default channel.`);
+        }
+
+        if (currentChannelId !== newTargetId) {
+            console.log(`[${getTimestamp()}] [SCANNER] Target voice channel changing from ${currentChannelId} to ${newTargetId}. Moving...`);
+            currentChannelId = newTargetId;
+            await safeJoinVoice(currentChannelId);
+        } else {
+            // Make sure the bot is actually in the target channel
+            const connection = getVoiceConnection(guild.id);
+            const status = connection?.state.status;
+            if (!connection || status === 'disconnected' || status === 'destroyed' || connection.joinConfig.channelId !== currentChannelId) {
+                console.log(`[${getTimestamp()}] [SCANNER] Bot is not in target channel ${currentChannelId}. Rejoining...`);
+                await safeJoinVoice(currentChannelId);
+            }
+        }
+    } catch (err) {
+        console.error(`[${getTimestamp()}] [SCANNER ERROR] Failed to scan channels: ${err.message}`);
+    }
+}
+
 client.on('ready', async () => {
     console.log('='.repeat(60));
     console.log(`Logged in as USER: ${client.user.tag} (ID: ${client.user.id})`);
-    console.log(`Target Voice Channel ID: ${CHANNEL_ID}`);
+    console.log(`Default Voice Channel ID: ${DEFAULT_CHANNEL_ID}`);
     console.log('='.repeat(60));
 
     botStatus = 'Logged in, connecting to voice...';
-    await safeJoinVoice();
+    await safeJoinVoice(currentChannelId);
+
+    // Initial check for active channels
+    await scanAndMoveToActiveChannel();
 
     // Start keepalive checks every 30 seconds
     setInterval(async () => {
@@ -196,7 +264,7 @@ client.on('ready', async () => {
         // If targetGuildId isn't known yet, try to fetch the channel to resolve it
         if (!targetGuildId) {
             try {
-                const channel = await client.channels.fetch(CHANNEL_ID);
+                const channel = await client.channels.fetch(currentChannelId);
                 if (channel) {
                     targetGuildId = channel.guild.id;
                 }
@@ -212,13 +280,20 @@ client.on('ready', async () => {
             // Reconnect if the connection is missing, disconnected, or destroyed
             if (!connection || status === 'disconnected' || status === 'destroyed') {
                 console.log(`[${getTimestamp()}] [KEEPALIVE] Voice connection not found or inactive (status: ${status || 'none'}). Reconnecting...`);
-                await safeJoinVoice();
-            } else if (connection.joinConfig.channelId !== CHANNEL_ID) {
+                await safeJoinVoice(currentChannelId);
+            } else if (connection.joinConfig.channelId !== currentChannelId) {
                 console.log(`[${getTimestamp()}] [KEEPALIVE] Connected to wrong channel (${connection.joinConfig.channelId}). Reconnecting to target channel...`);
-                await safeJoinVoice();
+                await safeJoinVoice(currentChannelId);
             }
         }
     }, 30000);
+
+    // Start dynamic channel scanner checks every 4 minutes (240,000 milliseconds)
+    console.log(`[${getTimestamp()}] [SCANNER] Starting voice channel scanner (checks every 4 minutes)...`);
+    setInterval(async () => {
+        if (!client.isReady()) return;
+        await scanAndMoveToActiveChannel();
+    }, 240000);
 });
 
 console.log('Starting Discord Client (Node.js)...');
