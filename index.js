@@ -1,7 +1,8 @@
 const os = require('os');
 const express = require('express');
 const { Client } = require('discord.js-selfbot-v13');
-const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
+const { joinVoiceChannel, getVoiceConnection, createAudioPlayer, createAudioResource, StreamType } = require('@discordjs/voice');
+const { Readable } = require('stream');
 require('dotenv').config();
 
 // Load configurations
@@ -48,6 +49,55 @@ if (KEEP_ALIVE) {
 // Initialize Discord Client (Self-bot)
 const client = new Client({
     patchVoice: true // Critical: patches discord.js voice gateway connection for user accounts
+});
+
+// Handle client errors to prevent process crashes
+client.on('error', (error) => {
+    console.error(`[CLIENT ERROR] ${error.message}`);
+});
+
+client.on('shardError', (error) => {
+    console.error(`[SHARD ERROR] A shard's WebSocket connection encountered an error: ${error.message}`);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[UNHANDLED REJECTION] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('[UNCAUGHT EXCEPTION] Uncaught Exception: ', error);
+});
+
+// Opus silence frame (0xF8, 0xFF, 0xFE)
+const SILENCE_FRAME = Buffer.from([0xf8, 0xff, 0xfe]);
+
+class SilenceStream extends Readable {
+    constructor() {
+        super();
+        this.interval = null;
+    }
+    _read() {
+        if (!this.interval) {
+            this.interval = setInterval(() => {
+                this.push(SILENCE_FRAME);
+            }, 20);
+        }
+    }
+    _destroy() {
+        if (this.interval) {
+            clearInterval(this.interval);
+        }
+    }
+}
+
+const audioPlayer = createAudioPlayer();
+
+audioPlayer.on('stateChange', (oldState, newState) => {
+    console.log(`[AUDIO PLAYER] Changed from ${oldState.status} to ${newState.status}`);
+});
+
+audioPlayer.on('error', (error) => {
+    console.error(`[AUDIO PLAYER ERROR] ${error.message}`);
 });
 
 function getTimestamp() {
@@ -98,6 +148,15 @@ async function safeJoinVoice() {
             selfMute: SELF_MUTE,
             selfDeaf: SELF_DEAF,
         });
+
+        // Subscribe to audio player transmitting silence to prevent inactivity disconnects
+        connection.subscribe(audioPlayer);
+        
+        const silenceStream = new SilenceStream();
+        const resource = createAudioResource(silenceStream, {
+            inputType: StreamType.Opus
+        });
+        audioPlayer.play(resource);
 
         connection.removeAllListeners('stateChange');
         connection.removeAllListeners('error');
