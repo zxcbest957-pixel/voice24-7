@@ -206,41 +206,45 @@ async function scanAndMoveToActiveChannel() {
         // Filter for voice and stage channels
         const voiceChannels = guild.channels.cache.filter(c => c.type === 'GUILD_VOICE' || c.type === 'GUILD_STAGE_VOICE');
 
-        let bestChannel = null;
-        let maxActiveUsers = 0;
-
-        for (const [id, channel] of voiceChannels) {
-            // Count active humans (excluding our selfbot client)
-            const humanCount = channel.members.filter(m => m.id !== client.user.id).size;
-            
-            // Check if the channel is full (has no space for the bot to join)
+        // Filter for voice and stage channels that have space
+        const availableChannels = voiceChannels.filter(channel => {
             const isCurrentChannel = channel.members.has(client.user.id);
-            const hasSpace = channel.userLimit === 0 || channel.members.size < channel.userLimit || isCurrentChannel;
+            return channel.userLimit === 0 || channel.members.size < channel.userLimit || isCurrentChannel;
+        });
 
-            if (humanCount > 0 && hasSpace && humanCount > maxActiveUsers) {
-                maxActiveUsers = humanCount;
-                bestChannel = channel;
-            }
+        if (availableChannels.size === 0) {
+            console.log(`[${getTimestamp()}] [SCANNER] No available voice channels with space found.`);
+            return;
         }
 
-        let newTargetId = DEFAULT_CHANNEL_ID;
-        if (bestChannel) {
-            newTargetId = bestChannel.id;
-            console.log(`[${getTimestamp()}] [SCANNER] Found voice channel with active users: '${bestChannel.name}' (Active users: ${maxActiveUsers})`);
+        // Filter channels that have other human users
+        const populatedChannels = availableChannels.filter(c => c.members.filter(m => m.id !== client.user.id).size > 0);
+
+        let chosenChannel = null;
+        if (populatedChannels.size > 0) {
+            // Pick a random channel from those that have people and space
+            const list = [...populatedChannels.values()];
+            chosenChannel = list[Math.floor(Math.random() * list.length)];
+            console.log(`[${getTimestamp()}] [SCANNER] Found ${populatedChannels.size} populated channels with space. Selected random: '${chosenChannel.name}' (People: ${chosenChannel.members.size})`);
         } else {
-            console.log(`[${getTimestamp()}] [SCANNER] No voice channels with active users found. Falling back to default channel.`);
+            // Pick a random channel from all available channels with space
+            const list = [...availableChannels.values()];
+            chosenChannel = list[Math.floor(Math.random() * list.length)];
+            console.log(`[${getTimestamp()}] [SCANNER] No populated channels. Selected random available: '${chosenChannel.name}'`);
         }
+
+        const newTargetId = chosenChannel.id;
 
         if (currentChannelId !== newTargetId) {
             console.log(`[${getTimestamp()}] [SCANNER] Target voice channel changing from ${currentChannelId} to ${newTargetId}. Moving...`);
             currentChannelId = newTargetId;
             await safeJoinVoice(currentChannelId);
         } else {
-            // Make sure the bot is actually in the target channel
+            // Make sure the bot is actually in the target channel and healthy
             const connection = getVoiceConnection(guild.id);
             const status = connection?.state.status;
             if (!connection || status === 'disconnected' || status === 'destroyed' || connection.joinConfig.channelId !== currentChannelId) {
-                console.log(`[${getTimestamp()}] [SCANNER] Bot is not in target channel ${currentChannelId}. Rejoining...`);
+                console.log(`[${getTimestamp()}] [SCANNER] Bot is not in target channel ${currentChannelId} or status is ${status || 'none'}. Rejoining...`);
                 await safeJoinVoice(currentChannelId);
             }
         }
@@ -255,10 +259,9 @@ client.on('ready', async () => {
     console.log(`Default Voice Channel ID: ${DEFAULT_CHANNEL_ID}`);
     console.log('='.repeat(60));
 
-    botStatus = 'Logged in, connecting to voice...';
-    await safeJoinVoice(currentChannelId);
-
-    // Initial check for active channels
+    botStatus = 'Logged in, scanning channels...';
+    
+    // Initial scan will automatically join the best or default voice channel
     await scanAndMoveToActiveChannel();
 
     // Start keepalive checks every 30 seconds
@@ -292,12 +295,12 @@ client.on('ready', async () => {
         }
     }, 30000);
 
-    // Start dynamic channel scanner checks every 4 minutes (240,000 milliseconds)
-    console.log(`[${getTimestamp()}] [SCANNER] Starting voice channel scanner (checks every 4 minutes)...`);
+    // Start dynamic channel scanner checks every 3 minutes (180,000 milliseconds)
+    console.log(`[${getTimestamp()}] [SCANNER] Starting voice channel scanner (checks every 3 minutes)...`);
     setInterval(async () => {
         if (!client.isReady()) return;
         await scanAndMoveToActiveChannel();
-    }, 240000);
+    }, 180000);
 });
 
 console.log('Starting Discord Client (Node.js)...');
